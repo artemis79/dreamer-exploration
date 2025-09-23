@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --account=rrg-mbowling-ad
+#SBATCH --account=aip-mbowling
 #SBATCH --cpus-per-task=1 
 #SBATCH --gpus-per-node=1 
 #SBATCH --mem=16G 
@@ -41,12 +41,12 @@ pip install "sheeprl[atari] @ git+https://github.com/Eclectic-Sheep/sheeprl.git"
 python sheeprl.py exp=${exp_name} env=${env} env.id=${env_id} algo.cnn_keys.encoder="[rgb]" fabric.accelerator=gpu fabric.strategy=ddp fabric.devices=2 algo.mlp_keys.encoder="[]" algo.total_steps=${total_steps}
 
 
-log_dir="$HOME/scratch/test_logs/${exp_name}"
+log_dir="$HOME/scratch/test_logs/${exp_name}/${env_id}"
 if ![ -d "$log_dir" ]; then
     mkdir $log_dir
 fi
 
-log_dir="$log_dir/${exp_name}/${env_id}/${env_id}"
+log_dir="$log_dir/${exp_name}/${env_id}" 
 if ![ -d "$log_dir" ]; then
     mkdir $log_dir
 fi
