@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import os
+from uu import encode
 import warnings
 from functools import partial
 from typing import Any, Dict, Sequence
@@ -23,6 +24,7 @@ from torch.optim import Optimizer
 from torchmetrics import SumMetric
 
 from sheeprl.algos.dreamer_v3.agent import WorldModel, build_agent
+from sheeprl.algos.dreamer_v3.exploration import PartitionCountingExploration
 from sheeprl.algos.dreamer_v3.loss import reconstruction_loss
 from sheeprl.algos.dreamer_v3.utils import Moments, compute_lambda_values, prepare_obs, test
 from sheeprl.data.buffers import EnvIndependentReplayBuffer, SequentialReplayBuffer
@@ -111,7 +113,6 @@ def train(
 
     # Embed observations from the environment
     embedded_obs = world_model.encoder(batch_obs)
-
     if cfg.algo.world_model.decoupled_rssm:
         posteriors_logits, posteriors = world_model.rssm._representation(embedded_obs)
         for i in range(0, sequence_length):
@@ -143,8 +144,8 @@ def train(
             priors_logits[i] = prior_logits
             posteriors[i] = posterior
             posteriors_logits[i] = posterior_logits
-    latent_states = torch.cat((posteriors.view(*posteriors.shape[:-2], -1), recurrent_states), -1)
 
+    latent_states = torch.cat((posteriors.view(*posteriors.shape[:-2], -1), recurrent_states), -1)
     # Compute predictions for the observations
     reconstructed_obs: Dict[str, torch.Tensor] = world_model.observation_model(latent_states)
 
@@ -443,6 +444,15 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
         state["critic"] if cfg.checkpoint.resume_from else None,
         state["target_critic"] if cfg.checkpoint.resume_from else None,
     )
+    
+    # Exploration
+    if cfg.algo.actor.exploration.method == "PCE":
+        stochastic_size = cfg.algo.world_model.stochastic_size
+        discrete_size =  cfg.algo.world_model.discrete_size
+        beta = cfg.algo.actor.exploration.beta
+        partition_counts = PartitionCountingExploration(stochastic_size, discrete_size, action_space.n, beta)
+        mid_counts = [PartitionCountingExploration(stochastic_size, discrete_size, action_space.n, beta, start_count=0.0) for i in range(cfg.env.num_envs)]
+            
 
     # Optimizers
     world_optimizer = hydra.utils.instantiate(
@@ -547,7 +557,10 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
     player.init_states()
 
     cumulative_per_rank_gradient_steps = 0
+    intrinsic_rewards = np.zeros(cfg.env.num_envs)
+
     for iter_num in range(start_iter, total_iters + 1):
+        print("iteration_number:", iter_num)
         policy_step += policy_steps_per_iter
 
         with torch.inference_mode():
@@ -583,6 +596,33 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
                             torch.stack([real_act.argmax(dim=-1) for real_act in real_actions], dim=-1).cpu().numpy()
                         )
 
+                    if cfg.algo.actor.exploration.method == "PCE":
+                        torch_embedded_obs = world_model.encoder(torch_obs)
+                        embedded_obs = torch_embedded_obs.numpy()
+                        embedded_obs = embedded_obs.reshape(embedded_obs.shape[1:])
+                        if cfg.algo.world_model.decoupled_rssm:
+                            _, posterior = world_model.rssm._representation(embedded_obs)
+                        else:
+                            recurrent_state_size = cfg.algo.world_model.recurrent_model.recurrent_state_size
+                            posterior = torch.zeros(cfg.env.num_envs, stochastic_size, discrete_size, device=device)
+                            recurrent_state = torch.zeros(1, cfg.env.num_envs, recurrent_state_size, device=device)
+                            _, posterior = world_model.rssm._representation(
+                                    recurrent_state,
+                                    torch_embedded_obs,
+                            )
+
+                        posterior = posterior.reshape(posterior.shape[1:]).numpy()
+                        # Increment mid counts according to discrete representation (posterior)
+                        for i in range(cfg.env.num_envs):
+                            # TODO: assert to check if the first argument of actions is one
+                            assert True
+                            assert actions.shape[0] == 1
+                            mid_counts[i].increment_counts(posterior[i], actions[0][i])
+                            num_action = np.argmax(actions[0][i])
+                            intrinsic_rewards[i] = partition_counts.calculate_intrinsic_reward(posterior[i], actions[0][i], mid_counts[i])
+                            
+                        
+
                 step_data["actions"] = actions.reshape((1, cfg.env.num_envs, -1))
                 rb.add(step_data, validate_args=cfg.buffer.validate_args)
 
@@ -590,6 +630,11 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
                     real_actions.reshape(envs.action_space.shape)
                 )
                 dones = np.logical_or(terminated, truncated).astype(np.uint8)
+
+                assert intrinsic_rewards.shape == rewards.shape
+                print(rewards, intrinsic_rewards)
+                rewards = rewards + intrinsic_rewards
+
 
             step_data["is_first"] = np.zeros_like(step_data["terminated"])
             if "restart_on_exception" in infos:
@@ -655,6 +700,13 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
                 step_data["truncated"][:, dones_idxes] = np.zeros_like(step_data["truncated"][:, dones_idxes])
                 step_data["is_first"][:, dones_idxes] = np.ones_like(step_data["is_first"][:, dones_idxes])
                 player.init_states(dones_idxes)
+
+        # Update counts
+        if cfg.algo.actor.exploration.method == "PCE":
+            for i in range(cfg.env.num_envs):
+                partition_counts.add_counts(mid_counts[i].counts / len(mid_counts))
+            mid_counts = [PartitionCountingExploration(stochastic_size, discrete_size, action_space.n, beta, start_count=0.0) for i in range(cfg.env.num_envs)]
+            
 
         # Train the agent
         if iter_num >= learning_starts:
