@@ -38,7 +38,7 @@ env_id="PongNoFrameskip-v4"
 total_steps=1000
 
 pip install "sheeprl[atari] @ git+https://github.com/Eclectic-Sheep/sheeprl.git"
-python sheeprl.py exp=${exp_name} env=${env} env.id=${env_id} algo.cnn_keys.encoder="[rgb]" fabric.accelerator=gpu fabric.strategy=ddp fabric.devices=2 algo.mlp_keys.encoder="[]" algo.total_steps=${total_steps}
+python sheeprl.py exp=${exp_name} env=${env} env.id=${env_id} algo.cnn_keys.encoder="[rgb]" fabric.accelerator=cuda fabric.strategy=ddp fabric.devices=2 algo.mlp_keys.encoder="[]" algo.total_steps=${total_steps}
 
 
 log_dir="$HOME/scratch/test_logs/${exp_name}/${env_id}"
