@@ -598,10 +598,10 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
 
                     if cfg.algo.actor.exploration.method == "PCE":
                         torch_embedded_obs = world_model.encoder(torch_obs)
-                        embedded_obs = torch_embedded_obs.numpy()
-                        embedded_obs = embedded_obs.reshape(embedded_obs.shape[1:])
+                        # embedded_obs = torch_embedded_obs.numpy()
+                        # embedded_obs = embedded_obs.reshape(embedded_obs.shape[1:])
                         if cfg.algo.world_model.decoupled_rssm:
-                            _, posterior = world_model.rssm._representation(embedded_obs)
+                            _, posterior = world_model.rssm._representation(torch_embedded_obs)
                         else:
                             recurrent_state_size = cfg.algo.world_model.recurrent_model.recurrent_state_size
                             posterior = torch.zeros(cfg.env.num_envs, stochastic_size, discrete_size, device=device)
@@ -611,7 +611,7 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
                                     torch_embedded_obs,
                             )
 
-                        posterior = posterior.reshape(posterior.shape[1:]).numpy()
+                        posterior = posterior.reshape(posterior.shape[1:]).detach().cpu().numpy()
                         # Increment mid counts according to discrete representation (posterior)
                         for i in range(cfg.env.num_envs):
                             # TODO: assert to check if the first argument of actions is one
