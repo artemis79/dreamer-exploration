@@ -42,14 +42,8 @@ python sheeprl.py exp=${exp_name} env=${env} env.id=${env_id} algo.cnn_keys.enco
 
 
 log_dir="$HOME/scratch/test_logs/${exp_name}/${env_id}"
-if ![ -d "$log_dir" ]; then
+if [ ! -d "$log_dir" ]; then
     mkdir $log_dir
 fi
-
-log_dir="$log_dir/${exp_name}/${env_id}" 
-if ![ -d "$log_dir" ]; then
-    mkdir $log_dir
-fi
-
 
 cp -r logs/runs/${exp_name}/${env_id}/2* ${log_dir}
